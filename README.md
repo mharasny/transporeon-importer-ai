@@ -1,1 +1,1 @@
-Tworzę program całkowicie tworzony przez chataGPT
+Tworzę program całkowicie tworzony przez chataGPT4.1, program pobiera dane z plików PDF, CSV, XLSX, JPG oraz pola tekstowego, wrzuca do api chatgpt, przetwarza i przygotowuje gotowy plik do wysłania do do transporeona. Transporeon wczytuje ten plik json i tworzy frachty do opublikowania na giełdzie 
