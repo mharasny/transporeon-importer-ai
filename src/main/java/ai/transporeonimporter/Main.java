@@ -1,121 +1,131 @@
 package ai.transporeonimporter;
 
 import javafx.application.Application;
-import javafx.stage.Stage;
+import javafx.application.Platform;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.stage.FileChooser;
+import javafx.stage.Stage;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
-import javafx.geometry.Insets;
-
 import java.io.File;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
 
 public class Main extends Application {
-
-    private TextArea resultArea;
-    private File selectedFile;
     private TextArea manualTextArea;
-
-    public static void main(String[] args) {
-        launch(args);
-    }
+    private TextArea resultArea;
 
     @Override
     public void start(Stage primaryStage) {
         primaryStage.setTitle("Transporeon Importer AI");
 
-        Button chooseFileBtn = new Button("Wybierz plik (PDF, CSV, XLSX, JPG)");
+        // Przycisk ustawień po prawej
         Button settingsBtn = new Button("Ustawienia");
-        Label fileLabel = new Label("Nie wybrano pliku");
-
-        chooseFileBtn.setOnAction(e -> {
-            FileChooser fileChooser = new FileChooser();
-            fileChooser.getExtensionFilters().addAll(
-                    new FileChooser.ExtensionFilter("Obsługiwane pliki", "*.pdf", "*.csv", "*.xlsx", "*.jpg", "*.jpeg")
-            );
-            File file = fileChooser.showOpenDialog(primaryStage);
-            if (file != null) {
-                selectedFile = file;
-                fileLabel.setText("Wybrano: " + file.getName());
-            }
-        });
-
+        HBox topBar = new HBox();
+        topBar.setPadding(new Insets(10, 10, 0, 10));
+        topBar.setAlignment(Pos.TOP_RIGHT);
+        topBar.getChildren().add(settingsBtn);
         settingsBtn.setOnAction(e -> SettingsWindow.showSettingsWindow());
 
+        // Przycisk do ładowania pliku
+        Button importBtn = new Button("Importuj plik (PDF, CSV, XLSX, JPG)");
+        importBtn.setOnAction(e -> chooseFile(primaryStage));
+
+        // Pole na JSON
         manualTextArea = new TextArea();
-        manualTextArea.setPromptText("Możesz tu wkleić/edytować tekst, który zostanie wysłany do OpenAI (lub wybierz plik powyżej).");
-        manualTextArea.setPrefRowCount(8);
-        manualTextArea.setWrapText(true);
+        manualTextArea.setPromptText("Wklej tutaj JSON frachtu lub skonwertowane dane z pliku...");
 
-        Button sendBtn = new Button("Wyślij do OpenAI");
-        sendBtn.setOnAction(e -> sendToOpenAI());
+        // Przycisk wysyłania
+        Button sendBtn = new Button("Wyślij do Transporeon");
+        sendBtn.setOnAction(e -> sendToTransporeon());
 
+        // Wynik działania
         resultArea = new TextArea();
-        resultArea.setPromptText("Tutaj pojawi się wynikowy JSON...");
         resultArea.setEditable(false);
         resultArea.setWrapText(true);
+        resultArea.setPromptText("Wynik operacji...");
 
-        HBox topRow = new HBox(10, chooseFileBtn, settingsBtn, fileLabel);
-        VBox root = new VBox(12, topRow, manualTextArea, sendBtn, resultArea);
-        root.setPadding(new Insets(15));
-        Scene scene = new Scene(root, 650, 560);
+        VBox mainBox = new VBox(10, topBar, importBtn,
+            new Label("Dane JSON frachtu:"), manualTextArea,
+            sendBtn, new Label("Odpowiedź API:"), resultArea);
+        mainBox.setPadding(new Insets(10));
+        Scene scene = new Scene(mainBox, 650, 580);
 
         primaryStage.setScene(scene);
         primaryStage.show();
     }
 
-    private void sendToOpenAI() {
-        resultArea.clear();
-
-        // Najpierw sprawdź pole tekstowe (jeśli nie jest puste, korzystamy z niego)
-        String userText = manualTextArea.getText().trim();
-        String textToSend = null;
-
-        if (!userText.isEmpty()) {
-            textToSend = userText;
-        } else if (selectedFile != null) {
+    private void chooseFile(Stage stage) {
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.setTitle("Wybierz plik do zaimportowania");
+        fileChooser.getExtensionFilters().addAll(
+            new FileChooser.ExtensionFilter("Obsługiwane pliki", "*.pdf", "*.csv", "*.xlsx", "*.jpg", "*.jpeg", "*.png"),
+            new FileChooser.ExtensionFilter("PDF", "*.pdf"),
+            new FileChooser.ExtensionFilter("CSV", "*.csv"),
+            new FileChooser.ExtensionFilter("Excel", "*.xlsx"),
+            new FileChooser.ExtensionFilter("Obrazy", "*.jpg", "*.jpeg", "*.png")
+        );
+        File file = fileChooser.showOpenDialog(stage);
+        if (file != null) {
+            String json = "";
+            String fileName = file.getName().toLowerCase();
             try {
-                textToSend = extractFileText(selectedFile);
-            } catch (Exception ex) {
-                resultArea.setText("Błąd podczas czytania pliku: " + ex.getMessage());
-                return;
+                if (fileName.endsWith(".pdf")) {
+                    json = PdfToTextService.extractText(file);
+                } else if (fileName.endsWith(".csv")) {
+                    json = CsvToTextService.extractText(file);
+                } else if (fileName.endsWith(".xlsx")) {
+                    json = XlsxToTextService.extractText(file);
+                } else if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg") || fileName.endsWith(".png")) {
+                    json = JpgOcrService.extractText(file);
+                } else {
+                    resultArea.setText("Nieobsługiwany format pliku!");
+                    return;
+                }
+                manualTextArea.setText(json);
+                resultArea.setText("Plik zaimportowany i przekonwertowany do JSON.");
+            } catch (Exception e) {
+                resultArea.setText("Błąd podczas przetwarzania pliku: " + e.getMessage());
             }
-        } else {
-            resultArea.setText("Wklej tekst lub wybierz plik do wysłania!");
+        }
+    }
+
+    private void sendToTransporeon() {
+        resultArea.clear();
+        String json = manualTextArea.getText().trim();
+        if (json.isEmpty()) {
+            resultArea.setText("Wklej JSON frachtu do pola tekstowego!");
+            return;
+        }
+        ObjectMapper mapper = new ObjectMapper();
+        try {
+            mapper.readTree(json);
+        } catch (JsonProcessingException e) {
+            resultArea.setText("Błąd: Nieprawidłowy JSON!\n" + e.getMessage());
             return;
         }
 
-        String apiKey = ApiKeyManager.readApiKey();
-        if (apiKey.isEmpty()) {
-            resultArea.setText("Brak klucza OpenAI API. Ustaw klucz w Ustawieniach.");
+        String transporeonToken = TransporeonKeyManager.readApiKey();
+        if (transporeonToken.isEmpty()) {
+            resultArea.setText("Brak klucza Transporeon API. Ustaw klucz w pliku transporeon.key!");
             return;
         }
 
-        String finalTextToSend = textToSend;
         new Thread(() -> {
             try {
-                String jsonResult = OpenAiApiService.sendPrompt(apiKey, finalTextToSend);
-                javafx.application.Platform.runLater(() -> resultArea.setText(jsonResult));
+                String response = TransporeonApiService.createShipment(transporeonToken, json);
+                Platform.runLater(() -> resultArea.setText(response));
             } catch (Exception ex) {
                 ex.printStackTrace();
-                javafx.application.Platform.runLater(() ->
+                Platform.runLater(() ->
                         resultArea.setText("Błąd: " + ex.getMessage()));
             }
         }).start();
     }
 
-    private String extractFileText(File file) throws Exception {
-        String name = file.getName().toLowerCase();
-        if (name.endsWith(".pdf")) {
-            return PdfToTextService.extractText(file);
-        } else if (name.endsWith(".csv")) {
-            return CsvToTextService.extractText(file);
-        } else if (name.endsWith(".xlsx")) {
-            return XlsxToTextService.extractText(file);
-        } else if (name.endsWith(".jpg") || name.endsWith(".jpeg")) {
-            return JpgOcrService.extractText(file);
-        } else {
-            throw new IllegalArgumentException("Nieobsługiwany format pliku!");
-        }
+    public static void main(String[] args) {
+        launch(args);
     }
 }
